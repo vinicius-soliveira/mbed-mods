@@ -32,10 +32,6 @@ class Module {
       return _p_thread->start(cb) == osOK ? true : false;
     }
 
-    /* Returns the RTOS thread ID of this module's internal thread. */
-    osThreadId_t get_id() const {
-      return _p_thread->get_id();
-    }
 
     /* Prints runtime stack usage information of this module's thread.
      * NOTE: Requires stack statistics to be enabled in Mbed.
