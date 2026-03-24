@@ -7,6 +7,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <memory>
 
 HTTPCtrlIntfModule::HTTPCtrlIntfModule(
     EthernetInterface *p_net,
@@ -158,7 +159,6 @@ bool HTTPCtrlIntfModule::_send_http_response(TCPSocket *client, int status_code,
 
 void HTTPCtrlIntfModule::_task() {
   char cmd_buff[_max_cmd_len + 1];
-
   while (true) {
     TCPSocket server;
     server.set_blocking(true);
@@ -166,7 +166,7 @@ void HTTPCtrlIntfModule::_task() {
     nsapi_error_t status = server.open(_p_net);
     if (status != NSAPI_ERROR_OK) {
       debug("[HTTPCtrlIntfModule] server.open failed: %d\n", status);
-      ThisThread::sleep_for(Kernel::Clock::duration_u32(1000));
+      ThisThread::sleep_for(1s);
       continue;
     }
 
@@ -174,7 +174,7 @@ void HTTPCtrlIntfModule::_task() {
     if (status != NSAPI_ERROR_OK) {
       debug("[HTTPCtrlIntfModule] server.bind failed: %d\n", status);
       server.close();
-      ThisThread::sleep_for(Kernel::Clock::duration_u32(1000));
+      ThisThread::sleep_for(1s);
       continue;
     }
 
@@ -182,17 +182,20 @@ void HTTPCtrlIntfModule::_task() {
     if (status != NSAPI_ERROR_OK) {
       debug("[HTTPCtrlIntfModule] server.listen failed: %d\n", status);
       server.close();
-      ThisThread::sleep_for(Kernel::Clock::duration_u32(1000));
+      ThisThread::sleep_for(1s);
       continue;
     }
 
     debug("[HTTPCtrlIntfModule] listening on port %u\n",
-        static_cast<unsigned>(_port));
+          static_cast<unsigned>(_port));
 
     while (true) {
-      TCPSocket *client = server.accept();
-      if (!client) {
-        ThisThread::sleep_for(Kernel::Clock::duration_u32(100));
+      TCPSocket *client = nullptr;
+      status = NSAPI_ERROR_OK;
+
+      client = server.accept(&status);
+      if (client == nullptr || status != NSAPI_ERROR_OK) {
+        ThisThread::sleep_for(100ms);
         continue;
       }
 
@@ -200,61 +203,46 @@ void HTTPCtrlIntfModule::_task() {
       client->set_timeout(_timeout);
 
       if (!_read_http_request(client, _http_buff, sizeof(_http_buff))) {
-        _send_http_response(client, 400, "Bad Request", "text/plain",
-            "Bad Request");
+        _send_http_response(client, 400, "Bad Request", "text/plain", "Bad Request");
         client->close();
-        delete client;
         continue;
       }
 
-      HttpRequestType req_type = _parse_http_request(_http_buff, cmd_buff,
-          sizeof(cmd_buff));
+      HttpRequestType req_type = _parse_http_request(_http_buff, cmd_buff, sizeof(cmd_buff));
 
       if (req_type == HTTP_REQ_GET_ROOT) {
         const char *page = (_web_page != nullptr) ? _web_page :
             "<!DOCTYPE html><html><body>No page configured.</body></html>";
         _send_http_response(client, 200, "OK", "text/html", page);
         client->close();
-        delete client;
         continue;
       }
 
       if (req_type != HTTP_REQ_POST_CMD) {
-        _send_http_response(client, 400, "Bad Request", "text/plain",
-            "Bad Request");
+        _send_http_response(client, 400, "Bad Request", "text/plain", "Bad Request");
         client->close();
-        delete client;
         continue;
       }
 
       rtos::Semaphore ready(0, 1);
       CtrlIntfModuleMessage msg(cmd_buff, &ready);
 
-      bool queued = _try_put_for_cb(
-          rtos::Kernel::wait_for_u32_forever, &msg, 0);
-
+      bool queued = _try_put_for_cb(rtos::Kernel::wait_for_u32_forever, &msg, 0);
       if (!queued) {
-        _send_http_response(client, 503, "Service Unavailable", "text/plain",
-            "Service Unavailable");
+        _send_http_response(client, 503, "Service Unavailable", "text/plain", "Service Unavailable");
         client->close();
-        delete client;
         continue;
       }
 
-      bool signaled = ready.try_acquire_for(
-          Kernel::Clock::duration_u32(_timeout));
-
+      bool signaled = ready.try_acquire_for(Kernel::Clock::duration_u32(_timeout));
       if (!signaled) {
-        _send_http_response(client, 504, "Gateway Timeout", "text/plain",
-            "TIMEOUT");
+        _send_http_response(client, 504, "Gateway Timeout", "text/plain", "TIMEOUT");
         client->close();
-        delete client;
         continue;
       }
 
       _send_http_response(client, 200, "OK", "text/plain", cmd_buff);
       client->close();
-      delete client;
     }
   }
 }
